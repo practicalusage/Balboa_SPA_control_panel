@@ -1,6 +1,7 @@
 /*
 Arduino Sketch to allow RS485 communications with SPA
-//RT V1.0
+All rights PracticalUsage.com
+
 2026-5-8 Was able to receive from spa but trouble with probably "printf" kind of going wild sometimes
 2026-5-8 Was able to analyse FA state and FB commands from existing keyboard
 2026-5-11 Sending command to SPA (fake using another arduino) after interrupt from SPA PIN 5
@@ -20,7 +21,7 @@ OptoCoupler
   PIN 5: GND on 3 volt side (but shared all around)
   PIN 6: OUTPUT to 3.3 volt  inputpin on ESP32
   PIN 7: OPTIONAL: 4.7K resistor to PIN 5 to improve Switching speed
-  PIN 8: 3.3 Volt
+  PIN 8: 3.3 Volt from ESP32
 
   PIN 5 from SPA is HIGH at 5V except when SPA control board is talking (or listening) to this panel.
    Hence tracking FALLING to zero triggers the interrupt. But passing through the optocoupler inverses
@@ -49,7 +50,8 @@ uint32_t last_ota_time = 0;  // for standard Arduino OTA
 
 //Keyboard Commands
 //They seem to all start with 0xFB 0x06. The last byte is the checksum. Could be calculated but I just spyed it...
-//WARNING. replace 0x64, 0x35, 0x16, 0x00  with your keyboard UID ( analyse your existing keyboard FB COMMAND to find and copy it )
+//WARNING. replace 0x64, 0x35, 0x16, 0x00  with your keyboard UID
+//  ( analyse your existing keyboard FB COMMAND to find and copy it )
 // EXAMPLES
 // fb 06 66 66 66 66 02 fd 50
 // fb 06 03 45 0e 00 09 f6 f6
@@ -92,19 +94,21 @@ long unsigned howLongPinHIGH = 0;
 //byte toto = 0;  //Just for testing. Can be deleted
 //unsigned long lastCmdTime = 0;
 //int selectCounter = 0; //for testing
-bool tryWrite = false; // Command ready to write
-int writeLoop = 0; // We try writing the command more than once
+int wifiCounter = 0;
+int MQTTCounter = 0;
+bool tryWrite = false;  // Command ready to write
+int writeLoop = 0;      // We try writing the command more than once
 //Buffer for command TO SPA  TODO SIMPLIFY**************
 #define maxSizeCommandBufferLength 16
 int iCurrentCommandBufferLength = 0;
 uint8_t commandBuffer[maxSizeCommandBufferLength];  //OUTGOING command buffer only? TODO Vrify
 
-//MQTT Section ***********
+//MQTT and Wifi Section ***********
 const char* ssid = "rtls";                 // your network SSID (name of wifi network)
 const char* password = "leborddulac";      // your network password
 const char* mqtt_server = "192.168.2.82";  // your mqtt server ip
 const int mqtt_port = 1883;                // your mqtt server port
-const char* mqtt_topic = "ESP_SPA";        // topic (don't change this)
+const char* mqtt_topic = "ESP_SPA";        // topics must match MQTT setup
 const char* mqtt_topic_command = "ESP_SPA/command";
 const char* mqtt_topic_RCVD = "ESP_SPA_RCVD";  // When sending valid status buffer to MQTT
 String receivedData = " ";
@@ -130,11 +134,7 @@ void callback(char* topic, byte* payload, unsigned int length) {
     // Logic for COMMAND
     printf("We have just received a MQTT Command!");
     receivedData = strPayload;
-    receivedMQTTFlag = true;
-  } else if (strcmp(topic, "rooms/singola/heater") == 0) {
-    // Logic for "rooms/singola/heater" topic
-  } else if (strcmp(topic, "home/bedroom/lights") == 0) {
-    // Logic for "home/bedroom/lights" topic
+    receivedMQTTFlag = true;  //Processed in loop()
   }
 }
 
@@ -142,7 +142,10 @@ void callback(char* topic, byte* payload, unsigned int length) {
 void reconnect() {
   printf("MQTT Disconnected\r\n");
   // Loop until we're reconnected
-  while (!mqtt_client.connected()) {
+  MQTTCounter = 0;
+  while (!mqtt_client.connected() && MQTTCounter < 5) {
+    //repeat 5 times only
+    MQTTCounter++;
     // Create a random client ID
     String clientId = "ESP32SPA";
     clientId += String(random(0xffff), HEX);
@@ -153,10 +156,10 @@ void reconnect() {
       mqtt_client.publish(mqtt_topic, "ESP32_SPA On-Line");
       // ... and resubscribe
       mqtt_client.subscribe(mqtt_topic_command);
-    } else {
-      printf("failed, rc= %i, try again in 5 seconds\r\n", mqtt_client.state());
-      // Wait 5 seconds before retrying
-      delay(5000);
+    } else {  //Using BLE message when asked for PING
+      printf("failed, rc= %i, try again later\r\n", mqtt_client.state());
+      // Wait before retrying
+      delay(1000);
     }
   }
 }
@@ -207,7 +210,7 @@ class RxCallbacks : public BLECharacteristicCallbacks {
       tryWrite = true;
       notifyPhone("PUMP2 toggled");
 
-    } else if (msg == "RESET") {
+    } else if (msg == "RESET") {  //RT Careful: not called
       notifyPhone("Resetting…");
       delay(200);
       ESP.restart();
@@ -219,10 +222,16 @@ class RxCallbacks : public BLECharacteristicCallbacks {
       HandleMessage(sizeof(inputBufferStateOld), inputBufferStateOld);
 
 
-    } else if (msg == "PING") {
-      notifyPhone("PONG");
+    } else if (msg == "PING") {  //To check for WIFI and MQTT
+      if (!mqtt_client.connected()) {
+        notifyPhone("MQTT not connected");
+      } else if (!WL_CONNECTED) {
+        notifyPhone("WIFI not connected");
+      } else {
+        notifyPhone("WIFI & MQTT OK");
+      }
 
-    } else if (msg == "STOP") {
+    } else if (msg == "STOP") {  //for future function
       // add your stop logic here
       notifyPhone("STOP acknowledged");
 
@@ -237,7 +246,7 @@ void IRAM_ATTR panelSelected() {
   //msgStartTime = micros();
   //SPAWaitingForCommand = true;
   //uartFlush(tubUART);
-  whenPinHIGH = micros();
+  whenPinHIGH = micros();  //All that's needed if not testing
   //selectCounter++;
   //clearDataBuffer();
   //uart_flush(tubUART);  //Requires #include <driver/uart.h>
@@ -269,12 +278,14 @@ void setup() {
   }
 
   WiFi.begin(ssid, password);
-  // attempt to connect to Wifi network:
-  while (WiFi.status() != WL_CONNECTED) {
+  // attempt to connect to Wifi network: try 10 times
+  while (WiFi.status() != WL_CONNECTED && wifiCounter < 10) {
     printf(".");
     // wait 1 second for re-trying
+    wifiCounter++;
     delay(1000);
   }
+  wifiCounter = 0;
 
   IPAddress ip = WiFi.localIP();
   printf("WIFI Connected: with IP: %i \r\n", ip[3]);
@@ -323,7 +334,7 @@ void loop() {
               inputBufferStateOld[i] = inputBuffer[i];
             }
             // Process the received data (e.g., print it)
-            // The ESP32 subcontracts (!) the printing chores to a separate process. It does not really slow 
+            // The ESP32 subcontracts (!) the printing chores to a separate process. It does not really slow
             //  the main processor. This is crucial because at this point in the processing of the FA message,
             //  timing is crucial. MQTT publish seems to be handled the same way.
             for (int i = 0; i < expectedLength; i++) {
@@ -331,18 +342,18 @@ void loop() {
               //printf(" ");
             }
             printf("\r\n");
+            //RT TODO: publish only if MQTT is connected
             mqtt_client.publish(mqtt_topic_RCVD, inputBuffer, expectedLength);  //send it ASAP for study
           }
           // 3 FA commands coming including the first one. Might have to try sending the command again
           //      but my tests have been conclusive on first send. Anyway, SPA ignores the 2 remaining sends...
           if (tryWrite == true && writeLoop < 4) {  //only try writing 3 times
-                                                    //printf("in send command if"); //Testing
             writeLoop++;
             if (writeLoop > 3) {
               tryWrite = false;
             }
-            digitalWrite(RTS_PIN, HIGH); //Tell the RS485 interface that we want to write on the bus
-            delayMicroseconds(20);  //THIS IS THE IMPORTANT DELAY to finish processing incoming FA state
+            digitalWrite(RTS_PIN, HIGH);  //Tell the RS485 interface that we want to write on the bus
+            delayMicroseconds(20);        //THIS IS THE IMPORTANT DELAY to finish processing incoming FA state
             tub.write(commandBuffer, iCurrentCommandBufferLength);
             //delay(3);  //this delay my be important when sending to an Arduino for testing: adjust: works with 5 ms, not with 1 or 2 ms bur OK with 3!!!!!!!!!!!!!!!
             //Arduino UNO was receiving the right command (LIGHT) for the first time.
@@ -374,6 +385,7 @@ void loop() {
     }
     //delayMicroseconds(290);
   } else {
+    // We just really need to clear the tub buffer (>0) unless we are testing
     if (tub.available() > 0) {
       expectedLength = numberOfBytesToReceive();
       if (expectedLength >= 0) {
@@ -450,9 +462,14 @@ void loop() {
   // Might place the rest of this code in a ELSE to gain speed.
   ArduinoOTA.handle();
   mqtt_client.loop();
-  if (!mqtt_client.connected()) {
-    //myString = "MQTT Disconnected\r\n";
-    //    String myString = "WIFI Connected " + String(ip[3]);
+  if (!mqtt_client.connected() && millis() % 10 == 0) {  //delay to repeat every few seconds if disconnected
+    while (WiFi.status() != WL_CONNECTED && wifiCounter < 10) {
+      printf(".");
+      // wait 1 second for re-trying
+      wifiCounter++;
+      delay(1000);
+    }
+    wifiCounter = 0;
     printf("MQTT disconnected in loop\r\n");
     reconnect();
   }
@@ -463,7 +480,8 @@ void clearDataBuffer() {
   memset(inputBuffer, 0, 32);
 }
 
-void setCommand(uint8_t buff[], size_t len) {  //put command in Command buffer
+// Put command in Command buffer, ready to send
+void setCommand(uint8_t buff[], size_t len) {
   //clearCommandBuffer();
   memcpy(commandBuffer, buff, len);
   //for (int i = 0; i < lengthCommand; i++){
@@ -511,7 +529,7 @@ int numberOfBytesToReceive() {
   while (tub.available() < msgLength) {
     if (micros() - startTime >= 2500) {
       printf("Timeout: %u bytes not available in 2.5ms\n");
-      return 0;
+      return 0;  //RT: drastic GOTO!
     }
   }
   return msgLength;
@@ -528,7 +546,6 @@ This code could also be used for MQTT instead of sending the HEX buffer
   char newBuffer[80];  //RT This is the way I found to concatenate buffer with snprintf.
 
   // Let's check for a valid tempUnit
-  // No point validating the rest if not, apparently.
   String tempUnit = "?";
 
   if (buff[5] == 0x43) {  //DEC 67 or ASCII C...etc.
@@ -557,15 +574,15 @@ This code could also be used for MQTT instead of sending the HEX buffer
       temperature += (buff[4] & 0x0f);
       temperature = temperature;
 
-      snprintf(notificationBuffer, sizeof(notificationBuffer), "temperature: %i %s ", temperature, tempUnit);
+      snprintf(notificationBuffer, sizeof(notificationBuffer), "Temperature: %i %s ", temperature, tempUnit);
     }
   } else {
-    snprintf(notificationBuffer, sizeof(notificationBuffer), "temperature ?");
+    snprintf(notificationBuffer, sizeof(notificationBuffer), "Temperature ?");
   }
-  snprintf(newBuffer, sizeof(newBuffer), "%s", notificationBuffer);
+  snprintf(newBuffer, sizeof(newBuffer), "%s", notificationBuffer);  //Concatenate with existing content in buffer
 
   //Let's process the PUMP information
-  byte pumpInfo = buff[6];  //buff[13,14] in old code => half a byte (right side, LSD, 0 to F...)
+  byte pumpInfo = buff[6];  //Might optimize with 0x0f as only right digit is used
   int pump1State = 0;
   int pump2State = 0;
   String pump1StateString = "Off";
@@ -714,9 +731,10 @@ void prepareOTA() {
 }
 
 void prepareBLE() {
-  BLEDevice::init("ESP32-SPA");
+  BLEDevice::init("ESP32-SPA");  //RT Careful: Must match BLEManager.swift advertiser
 
   //RT Set Max Power (+9 dBm) for Default, Advertising, and Scanning
+  // because a tub full of water is bad for BLE signal...
   esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_DEFAULT, ESP_PWR_LVL_P9);
   esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_ADV, ESP_PWR_LVL_P9);
   esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_SCAN, ESP_PWR_LVL_P9);
