@@ -75,30 +75,26 @@ BLEServer* pServer = nullptr;
 BLECharacteristic* pTxChar = nullptr;  // sends notifications
 bool deviceConnected = false;
 
-//My variables
-//unsigned long timeBeetweenFrame = 290UL;  //290us
+// My variables
 int PIN_5_ACTIVE = 0;
-//unsigned long timeLastPin5 = 0;
-//unsigned long intervalLOW = 0;
-int expectedLength = 0;
+int expectedLength = 0;         // Calculated length of received message based on type
 const int numBytesMax = 32;     // Maximum number of characters to receive
 byte inputBuffer[numBytesMax];  // An array (buffer) to store the data
 //testing byte inputBuffer[] = { 0xfa, 0x14, 0x33, 0x34, 0x32, 0x43, 0x0a, 0x23, 0x09, 0x04c,
 //                       0x01, 0x01, 0x01, 0x01, 0x12, 0x31, 0x01, 0x01, 0x01, 0x01, 0x01, 0x1, 0xff };
-//byte inputBufferOld[numBytesMax] = {};
 byte inputBufferStateOld[23] = {};   //Store previously received STATE to only process NEW STATE
 byte inputBufferCommandOld[9] = {};  //Same for previous COMMAND
-byte inputBufferAEOld[16] = {};      //Same for AE unknown string
+byte inputBufferAEOld[16] = {};      //Same for AE previous string
 bool flagNewData = true;             //did we just receive something new?
 long unsigned whenPinHIGH = 0;
 long unsigned howLongPinHIGH = 0;
-bool SPAWaitingForCommand = false;
-byte toto = 0;  //Just for testing. Can be deleted
-unsigned long lastCmdTime = 0;
-int selectCounter = 0;
-bool tryWrite = false;
-int writeLoop = 0;
-//Buffer for command TO SPA SIMPLIFY**************
+//bool SPAWaitingForCommand = false;
+//byte toto = 0;  //Just for testing. Can be deleted
+//unsigned long lastCmdTime = 0;
+//int selectCounter = 0; //for testing
+bool tryWrite = false; // Command ready to write
+int writeLoop = 0; // We try writing the command more than once
+//Buffer for command TO SPA  TODO SIMPLIFY**************
 #define maxSizeCommandBufferLength 16
 int iCurrentCommandBufferLength = 0;
 uint8_t commandBuffer[maxSizeCommandBufferLength];  //OUTGOING command buffer only? TODO Vrify
@@ -220,7 +216,7 @@ class RxCallbacks : public BLECharacteristicCallbacks {
       //notifyPhone("in Status");
       //Supposes we have a valid FA message in the input buffer
       //format data for BLE (or local display) and send it (notify)
-      HandleMessage(sizeof(inputBufferStateOld), inputBufferStateOld);  
+      HandleMessage(sizeof(inputBufferStateOld), inputBufferStateOld);
 
 
     } else if (msg == "PING") {
@@ -239,10 +235,10 @@ class RxCallbacks : public BLECharacteristicCallbacks {
 
 void IRAM_ATTR panelSelected() {
   //msgStartTime = micros();
-  SPAWaitingForCommand = true;
+  //SPAWaitingForCommand = true;
   //uartFlush(tubUART);
   whenPinHIGH = micros();
-  selectCounter++;
+  //selectCounter++;
   //clearDataBuffer();
   //uart_flush(tubUART);  //Requires #include <driver/uart.h>
   //tub.flush(true);
@@ -300,11 +296,8 @@ void setup() {
 
 void loop() {
 
-  /* Only give timing for Valid incoming message and ignore the rest. We want to figure out the timeing
-  V6 try to confirm FB from SPA after succesfull FB sent
-  */
-  PIN_5_ACTIVE = digitalRead(PIN_5_FROM_SPA);  //SPA talking to us, on this panel
-  if (PIN_5_ACTIVE) {                          //SPA tALKING TO US
+  PIN_5_ACTIVE = digitalRead(PIN_5_FROM_SPA);  // Is SPA talking to us, on this panel
+  if (PIN_5_ACTIVE) {                          //SPA tALKING TO US?
     if (tub.available() > 0) {                 //anything in the receiving buffer?
 
       expectedLength = numberOfBytesToReceive();  //Based on 3 types of messages
@@ -314,7 +307,7 @@ void loop() {
         if (inputBuffer[0] == 0xFA && expectedLength != 0) {  //After much experimenting: Only look at FA messages
           howLongPinHIGH = micros() - whenPinHIGH;            //set in interrupt
           //printf(" FA received %u %i\r\n", howLongPinHIGH, selectCounter);// To test timing
-          //testing for new data only
+          //Acting on new data only
           flagNewData = false;
           for (int i = 0; i < expectedLength; i++) {
             if (inputBuffer[i] != inputBufferStateOld[i]) {
@@ -330,6 +323,9 @@ void loop() {
               inputBufferStateOld[i] = inputBuffer[i];
             }
             // Process the received data (e.g., print it)
+            // The ESP32 subcontracts (!) the printing chores to a separate process. It does not really slow 
+            //  the main processor. This is crucial because at this point in the processing of the FA message,
+            //  timing is crucial. MQTT publish seems to be handled the same way.
             for (int i = 0; i < expectedLength; i++) {
               printf("%x", inputBuffer[i]);  // Print the byte in hexadecimal format
               //printf(" ");
@@ -337,17 +333,15 @@ void loop() {
             printf("\r\n");
             mqtt_client.publish(mqtt_topic_RCVD, inputBuffer, expectedLength);  //send it ASAP for study
           }
-          //if (millis() - lastCmdTime >= 400 ) {  //from netmindz. Never worked.
           // 3 FA commands coming including the first one. Might have to try sending the command again
           //      but my tests have been conclusive on first send. Anyway, SPA ignores the 2 remaining sends...
           if (tryWrite == true && writeLoop < 4) {  //only try writing 3 times
-                                                    //printf("in send command if");
+                                                    //printf("in send command if"); //Testing
             writeLoop++;
             if (writeLoop > 3) {
               tryWrite = false;
             }
-            lastCmdTime = millis();  //Useless
-            digitalWrite(RTS_PIN, HIGH);
+            digitalWrite(RTS_PIN, HIGH); //Tell the RS485 interface that we want to write on the bus
             delayMicroseconds(20);  //THIS IS THE IMPORTANT DELAY to finish processing incoming FA state
             tub.write(commandBuffer, iCurrentCommandBufferLength);
             //delay(3);  //this delay my be important when sending to an Arduino for testing: adjust: works with 5 ms, not with 1 or 2 ms bur OK with 3!!!!!!!!!!!!!!!
@@ -566,7 +560,7 @@ This code could also be used for MQTT instead of sending the HEX buffer
       snprintf(notificationBuffer, sizeof(notificationBuffer), "temperature: %i %s ", temperature, tempUnit);
     }
   } else {
-    snprintf(notificationBuffer, sizeof(notificationBuffer), "Utemperature ?");
+    snprintf(notificationBuffer, sizeof(notificationBuffer), "temperature ?");
   }
   snprintf(newBuffer, sizeof(newBuffer), "%s", notificationBuffer);
 
