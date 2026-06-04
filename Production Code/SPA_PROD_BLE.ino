@@ -106,7 +106,7 @@ uint8_t commandBuffer[maxSizeCommandBufferLength];  //OUTGOING command buffer on
 //MQTT and Wifi Section ***********
 const char* ssid = "rtls";                 // your network SSID (name of wifi network)
 const char* password = "leborddulac";      // your network password
-const char* mqtt_server = "192.168.2.82";  // your mqtt server ip
+const char* mqtt_server = "192.168.2.230";  // your mqtt server ip
 const int mqtt_port = 1883;                // your mqtt server port
 const char* mqtt_topic = "ESP_SPA";        // topics must match MQTT setup
 const char* mqtt_topic_command = "ESP_SPA/command";
@@ -210,11 +210,6 @@ class RxCallbacks : public BLECharacteristicCallbacks {
       tryWrite = true;
       notifyPhone("PUMP2 toggled");
 
-    } else if (msg == "RESET") {  //RT Careful: not called
-      notifyPhone("Resetting…");
-      delay(200);
-      ESP.restart();
-
     } else if (msg == "STATUS") {
       //notifyPhone("in Status");
       //Supposes we have a valid FA message in the input buffer
@@ -231,9 +226,17 @@ class RxCallbacks : public BLECharacteristicCallbacks {
         notifyPhone("WIFI & MQTT OK");
       }
 
-    } else if (msg == "STOP") {  //for future function
-      // add your stop logic here
-      notifyPhone("STOP acknowledged");
+    } else if (msg == "UP") {  //RT Careful: not called
+      setCommand(keyboardCommand_UP, sizeof(keyboardCommand_UP));
+      writeLoop = 1;
+      tryWrite = true;
+      notifyPhone("Temp UP");
+
+    } else if (msg == "DOWN") {
+      setCommand(keyboardCommand_DOWN, sizeof(keyboardCommand_DOWN));
+      writeLoop = 1;
+      tryWrite = true;
+      notifyPhone("Temp Down");
 
     } else {
       notifyPhone("ECHO:" + msg);
