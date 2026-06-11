@@ -37,6 +37,7 @@ OptoCoupler
 #include <BLEServer.h>
 #include <BLEUtils.h>
 #include <BLE2902.h>
+#include "clientInfo.h"
 
 uint32_t last_ota_time = 0;  // for standard Arduino OTA
 
@@ -104,10 +105,10 @@ int iCurrentCommandBufferLength = 0;
 uint8_t commandBuffer[maxSizeCommandBufferLength];  //OUTGOING command buffer only? TODO Vrify
 
 //MQTT and Wifi Section ***********
-const char* ssid = "rtls";                 // your network SSID (name of wifi network)
-const char* password = "leborddulac";      // your network password
-const char* mqtt_server = "192.168.2.230";  // your mqtt server ip
-const int mqtt_port = 1883;                // your mqtt server port
+// const char* ssid = "YOUR SSID";                 // your network SSID (name of wifi network)
+// const char* password = "YOUR WIFI PASSWORD";      // your network password
+// const char* mqtt_server = "YOUR MQTT IP ADDRESS";  // your mqtt server ip
+// const int mqtt_port = 1883;                // your mqtt server port
 const char* mqtt_topic = "ESP_SPA";        // topics must match MQTT setup
 const char* mqtt_topic_command = "ESP_SPA/command";
 const char* mqtt_topic_RCVD = "ESP_SPA_RCVD";  // When sending valid status buffer to MQTT
@@ -311,7 +312,7 @@ void setup() {
 void loop() {
 
   PIN_5_ACTIVE = digitalRead(PIN_5_FROM_SPA);  // Is SPA talking to us, on this panel
-  if (PIN_5_ACTIVE) {                          //SPA tALKING TO US?
+  if (PIN_5_ACTIVE) {                          //SPA TALKING TO US?
     if (tub.available() > 0) {                 //anything in the receiving buffer?
 
       expectedLength = numberOfBytesToReceive();  //Based on 3 types of messages
@@ -319,18 +320,18 @@ void loop() {
         tub.readBytes(inputBuffer, expectedLength);
 
         if (inputBuffer[0] == 0xFA && expectedLength != 0) {  //After much experimenting: Only look at FA messages
-          howLongPinHIGH = micros() - whenPinHIGH;            //set in interrupt
+          howLongPinHIGH = micros() - whenPinHIGH;            //set in interrupt. Mostly for testing
           //printf(" FA received %u %i\r\n", howLongPinHIGH, selectCounter);// To test timing
           //Acting on new data only
           flagNewData = false;
-          for (int i = 0; i < expectedLength; i++) {
-            if (inputBuffer[i] != inputBufferStateOld[i]) {
+          for (int i = 0; i < expectedLength; i++) { 
+            if (inputBuffer[i] != inputBufferStateOld[i]) { // Only process if we get a new FA message
               flagNewData = true;
             }
           }
           if (flagNewData) {
             flagNewData = false;
-            for (int i = 0; i < expectedLength; i++) {
+            for (int i = 0; i < expectedLength; i++) { // Keep a copy of the new command for comparison
               //Careful: inputBufferStateOld is only used here so we know it's the right size and content in handleMessage()
               //It might be erroneous when the SPA has just started, but then it's initiazed empty. We could test
               // its length just before calling handleMessage() in BLE callback
@@ -355,7 +356,7 @@ void loop() {
             if (writeLoop > 3) {
               tryWrite = false;
             }
-            digitalWrite(RTS_PIN, HIGH);  //Tell the RS485 interface that we want to write on the bus
+            digitalWrite(RTS_PIN, HIGH);  //Tell the RS485 interface that we want to write on the bus. Standard.
             delayMicroseconds(20);        //THIS IS THE IMPORTANT DELAY to finish processing incoming FA state
             tub.write(commandBuffer, iCurrentCommandBufferLength);
             //delay(3);  //this delay my be important when sending to an Arduino for testing: adjust: works with 5 ms, not with 1 or 2 ms bur OK with 3!!!!!!!!!!!!!!!
@@ -369,11 +370,11 @@ void loop() {
           }
         } else if (inputBuffer[0] == 0xFB && expectedLength != 0) {
           // In my setup, SPA only sends FB when this panel is NOT selected. So this is not necessary
-          howLongPinHIGH = micros() - whenPinHIGH;  //set in interrupt
+          //howLongPinHIGH = micros() - whenPinHIGH;  //set in interrupt
           //printf("  FB received %u\r\n", howLongPinHIGH);
         } else if (inputBuffer[0] == 0xAE && expectedLength != 0) {
           // AE buffers are boring... I don't know what they do!
-          howLongPinHIGH = micros() - whenPinHIGH;  //set in interrupt
+          //howLongPinHIGH = micros() - whenPinHIGH;  //set in interrupt
           //printf("   AE received %u\r\n", howLongPinHIGH);
         } else {
           //printf("NOT an FA or FB or AE\n");
@@ -411,6 +412,8 @@ void loop() {
   //   writeLoop = 1;
   //   tryWrite = true;
   // }
+
+
   //We received and MQTT COMMAND and have to process it ASAP
   //RT TODO other commands validation. Transfer code to a function, called from MQTT directly.
   if (receivedMQTTFlag) {
@@ -462,7 +465,7 @@ void loop() {
   // }
   //clearDataBuffer();
 
-  // Might place the rest of this code in a ELSE to gain speed.
+  // Might place the rest of this code in a ELSE of the FA message processing to gain speed.
   ArduinoOTA.handle();
   mqtt_client.loop();
   if (!mqtt_client.connected() && millis() % 10 == 0) {  //delay to repeat every few seconds if disconnected
@@ -483,10 +486,10 @@ void clearDataBuffer() {
   memset(inputBuffer, 0, 32);
 }
 
-// Put command in Command buffer, ready to send
+// Put command in Command buffer, ready to send when next FA message comes in
 void setCommand(uint8_t buff[], size_t len) {
   //clearCommandBuffer();
-  memcpy(commandBuffer, buff, len);
+  memcpy(commandBuffer, buff, len); //Trying memcpy. Seems to be same speed as for()
   //for (int i = 0; i < lengthCommand; i++){
   //  commandBuffer[i] = keyboardCommand_LIGHT[i];
   //}
@@ -542,7 +545,7 @@ void HandleMessage(size_t len, uint8_t buff[]) {
   /* we are here because we got an FA14 valid message.
 This code was added to format data for bluetooth transmission
 instead of formating in the iPhone application
-This code could also be used for MQTT instead of sending the HEX buffer
+This code could also be used for MQTT instead of sending the complete HEX buffer
 */
   //Prepare BLE Notification buffers
   char notificationBuffer[80];
@@ -551,7 +554,7 @@ This code could also be used for MQTT instead of sending the HEX buffer
   // Let's check for a valid tempUnit
   String tempUnit = "?";
 
-  if (buff[5] == 0x43) {  //DEC 67 or ASCII C...etc.
+  if (buff[5] == 0x43) {  //ASCII char
     tempUnit = "C";
   } else if (buff[5] == 0x46) {
     tempUnit = "F";
@@ -564,7 +567,7 @@ This code could also be used for MQTT instead of sending the HEX buffer
     int temperature = 0;
     if (tempUnit == "C") {
       temperature = (buff[2] & 0x0f) * 100;  //Temp is actual ASCII digits so we keep only rightmost halfbyte
-      temperature += (buff[3] & 0x0f) * 10;
+      temperature += (buff[3] & 0x0f) * 10; //TODO Carefull as C temp is floating point with one decimal
       temperature += (buff[4] & 0x0f);
       temperature = temperature;
 
@@ -688,9 +691,10 @@ This code could also be used for MQTT instead of sending the HEX buffer
   //snprintf(newBuffer, sizeof(newBuffer), "%s", notificationBuffer); //if you continue, Careful woth LENGTH!
   //printf(" light state: %i", lightState);
 
-  notifyPhone(String(notificationBuffer));  // might be better in BLE functions. Would have to declare buffers global
+  notifyPhone(String(notificationBuffer));  //TODO might be better in BLE functions. Would have to declare buffers global
 }
 
+//Standard Arduino supplied OTA
 void prepareOTA() {
   //RT for arduino OTA: May ask for password ==> 12356789 for direct connection to module WiFi
   printf("Arduino OTA setup. ");
