@@ -105,7 +105,7 @@ int iCurrentCommandBufferLength = 0;
 uint8_t commandBuffer[maxSizeCommandBufferLength];  //OUTGOING command buffer only? TODO Vrify
 
 //MQTT and Wifi Section ***********
-// const char* ssid = "YOUR SSID";                 // your network SSID (name of wifi network)
+// const char* ssid = "YOUR SSID";                 // your network SSID (name of wifi network)(now in clientInfo.h)
 // const char* password = "YOUR WIFI PASSWORD";      // your network password
 // const char* mqtt_server = "YOUR MQTT IP ADDRESS";  // your mqtt server ip
 // const int mqtt_port = 1883;                // your mqtt server port
@@ -145,7 +145,7 @@ void reconnect() {
   // Loop until we're reconnected
   MQTTCounter = 0;
   while (!mqtt_client.connected() && MQTTCounter < 5) {
-    //repeat 5 times only
+    //repeat 5 times only. Allows BLE to work in the eevent network is down (or MQRR down)
     MQTTCounter++;
     // Create a random client ID
     String clientId = "ESP32SPA";
@@ -246,7 +246,7 @@ class RxCallbacks : public BLECharacteristicCallbacks {
 };
 
 
-void IRAM_ATTR panelSelected() {
+void IRAM_ATTR panelSelected() { //Interrupt routine. Mostly for testing.
   //msgStartTime = micros();
   //SPAWaitingForCommand = true;
   //uartFlush(tubUART);
@@ -276,13 +276,14 @@ void setup() {
   pinMode(PIN_5_FROM_SPA, INPUT_PULLUP);  //PULLUP even if signal is pulled to zero by optocoupler. Ensures better response if short interrupt <1ms
   printf("Setting serial port as pins %u, %u\n", RX_PIN, TX_PIN);
   tub.begin(115200, SERIAL_8N1, RX_PIN, TX_PIN);
-  while (tub.available() > 0) {  // workarond for bug with hanging during Serial2.begin -
+  while (tub.available() > 0) {  // workaround for bug with hanging during Serial2.begin -
                                  // https://github.com/espressif/arduino-esp32/issues/5443
     Serial.read();
   }
 
   WiFi.begin(ssid, password);
   // attempt to connect to Wifi network: try 10 times
+  // This is necessary to allow BLE to work even if not connected to Wifi (i.e. network down)
   while (WiFi.status() != WL_CONNECTED && wifiCounter < 10) {
     printf(".");
     // wait 1 second for re-trying
@@ -351,7 +352,7 @@ void loop() {
           }
           // 3 FA commands coming including the first one. Might have to try sending the command again
           //      but my tests have been conclusive on first send. Anyway, SPA ignores the 2 remaining sends...
-          if (tryWrite == true && writeLoop < 4) {  //only try writing 3 times
+          if (tryWrite == true && writeLoop < 4) {  //only try writing 3 times, one for each FA
             writeLoop++;
             if (writeLoop > 3) {
               tryWrite = false;
