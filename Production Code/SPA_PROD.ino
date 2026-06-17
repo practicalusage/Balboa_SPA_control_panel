@@ -86,9 +86,9 @@ int iCurrentCommandBufferLength = 0;
 uint8_t commandBuffer[maxSizeCommandBufferLength];  //OUTGOING command buffer only? TODO Vrify
 
 //MQTT Section ***********
-const char* ssid = "rtls";                 // your network SSID (name of wifi network)
-const char* password = "leborddulac";      // your network password
-const char* mqtt_server = "192.168.2.82";  // your mqtt server ip
+const char* ssid = "yourssid";                 // your network SSID (name of wifi network)
+const char* password = "yourpassword";      // your network password
+const char* mqtt_server = "mqttserverIP";  // your mqtt server ip
 const int mqtt_port = 1883;                // your mqtt server port
 const char* mqtt_topic = "ESP_SPA";        // topic (don't change this)
 const char* mqtt_topic_command = "ESP_SPA/command";
